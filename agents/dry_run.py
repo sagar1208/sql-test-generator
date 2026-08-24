@@ -1,10 +1,8 @@
 """Exercise the agent pipeline with invoke_bedrock stubbed out, for local testing without any AWS calls."""
 
-import sys
+import importlib.util
 from pathlib import Path
 from unittest.mock import patch
-
-import importlib.util
 
 AGENT_PATH = Path(__file__).parent / "01_sql_test_agent.py"
 
