@@ -1,4 +1,4 @@
-"""Generate SQL data-quality test cases from SQL/Glue/Airflow job files using AWS Bedrock."""
+"""Generate plain-English data-quality test case descriptions from SQL/Glue/Airflow job files using AWS Bedrock."""
 
 import logging
 import os
@@ -76,7 +76,7 @@ def resolve_source_path(cli_args: list[str]) -> Path:
 
 
 def build_prompt(source_code: str) -> str:
-    """Construct the prompt instructing the model to generate SQL data-quality test cases.
+    """Construct the prompt instructing the model to describe data-quality test cases in plain English.
 
     Args:
         source_code: The contents of the SQL/Glue/Airflow job file to analyze.
@@ -92,15 +92,16 @@ Your task:
    required columns, duplicate rows/keys, referential integrity violations
    against source tables, row-count sanity (e.g. unexpected drops in volume),
    type mismatches, and date range validity.
-3. Generate between 3 and 6 SQL assertion test cases. Each test must be a
-   runnable SELECT statement that returns rows ONLY WHEN the data-quality
-   check is VIOLATED (i.e. an empty result set means the check passed).
+3. Describe between 3 and 6 data-quality test cases in plain English. Each
+   test case will later be handed to a separate agent that writes the actual
+   SQL, so do NOT write any SQL yourself.
 
 Output requirements:
-- Return valid SQL only. Do not include any prose, explanation, or markdown
-  fences outside the SQL.
-- Immediately above each SELECT statement, include exactly one single-line SQL
-  comment (starting with --) explaining what that test checks.
+- Return plain English only. No SQL, no code blocks, no markdown fences.
+- Output a numbered list. For each item, state: the table and column(s)
+  involved, the specific risk being checked (e.g. null check, duplicate
+  check, referential integrity, row-count sanity, type mismatch, date range
+  validity), and what condition would count as a failure.
 
 Source job:
 ```
@@ -165,25 +166,25 @@ def invoke_bedrock(prompt: str) -> str:
     ) from last_error
 
 
-def write_output_file(source_filename: str, generated_sql: str) -> Path:
-    """Write generated SQL test cases to generated_tests/<source_filename_without_ext>_tests.sql.
+def write_output_file(source_filename: str, generated_test_cases: str) -> Path:
+    """Write generated plain-English test case descriptions to generated_tests/<source_filename_without_ext>_test_cases.txt.
 
     Args:
-        source_filename: The name of the source file the tests were generated from.
-        generated_sql: The SQL test cases to write.
+        source_filename: The name of the source file the test cases were generated from.
+        generated_test_cases: The plain-English test case descriptions to write.
 
     Returns:
         The path to the written output file.
     """
     GENERATED_TESTS_DIR.mkdir(parents=True, exist_ok=True)
     stem = Path(source_filename).stem
-    output_path = GENERATED_TESTS_DIR / f"{stem}_tests.sql"
-    output_path.write_text(generated_sql, encoding="utf-8")
+    output_path = GENERATED_TESTS_DIR / f"{stem}_test_cases.txt"
+    output_path.write_text(generated_test_cases, encoding="utf-8")
     return output_path
 
 
 def main() -> None:
-    """Orchestrate reading a source job file, generating SQL tests via Bedrock, and writing them out."""
+    """Orchestrate reading a source job file, generating test case descriptions via Bedrock, and writing them out."""
     try:
         source_path = resolve_source_path(sys.argv)
         source_code = read_source_file(source_path)
@@ -192,15 +193,15 @@ def main() -> None:
         prompt = build_prompt(source_code)
 
         logger.info("Invoking Bedrock model %s in %s", BEDROCK_MODEL_ID, AWS_REGION)
-        generated_sql = invoke_bedrock(prompt)
-        logger.info("Received response from Bedrock (%d chars)", len(generated_sql))
+        generated_test_cases = invoke_bedrock(prompt)
+        logger.info("Received response from Bedrock (%d chars)", len(generated_test_cases))
 
-        output_path = write_output_file(source_path.name, generated_sql)
-        logger.info("Wrote generated tests to: %s", output_path)
+        output_path = write_output_file(source_path.name, generated_test_cases)
+        logger.info("Wrote generated test cases to: %s", output_path)
 
         print(output_path)
     except Exception as error:
-        logger.error("SQL test generation failed: %s", error)
+        logger.error("Test case generation failed: %s", error)
         sys.exit(1)
 
 

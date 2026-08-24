@@ -1,4 +1,4 @@
-"""AWS Lambda entry point that triggers SQL data-quality test generation via Amazon Bedrock.
+"""AWS Lambda entry point that triggers plain-English data-quality test case generation via Amazon Bedrock.
 
 Self-contained for copy-paste into the Lambda console inline code editor: only depends
 on boto3, which ships with the standard Python Lambda runtime (no extra layers needed).
@@ -39,7 +39,7 @@ class BedrockInvocationError(Exception):
 
 
 def build_prompt(source_code: str) -> str:
-    """Construct the prompt instructing the model to generate SQL data-quality test cases.
+    """Construct the prompt instructing the model to describe data-quality test cases in plain English.
 
     Args:
         source_code: The contents of the SQL/Glue/Airflow job source to analyze.
@@ -55,15 +55,16 @@ Your task:
    required columns, duplicate rows/keys, referential integrity violations
    against source tables, row-count sanity (e.g. unexpected drops in volume),
    type mismatches, and date range validity.
-3. Generate between 3 and 6 SQL assertion test cases. Each test must be a
-   runnable SELECT statement that returns rows ONLY WHEN the data-quality
-   check is VIOLATED (i.e. an empty result set means the check passed).
+3. Describe between 3 and 6 data-quality test cases in plain English. Each
+   test case will later be handed to a separate agent that writes the actual
+   SQL, so do NOT write any SQL yourself.
 
 Output requirements:
-- Return valid SQL only. Do not include any prose, explanation, or markdown
-  fences outside the SQL.
-- Immediately above each SELECT statement, include exactly one single-line SQL
-  comment (starting with --) explaining what that test checks.
+- Return plain English only. No SQL, no code blocks, no markdown fences.
+- Output a numbered list. For each item, state: the table and column(s)
+  involved, the specific risk being checked (e.g. null check, duplicate
+  check, referential integrity, row-count sanity, type mismatch, date range
+  validity), and what condition would count as a failure.
 
 Source job:
 ```
@@ -152,7 +153,7 @@ def parse_event(event: dict[str, Any]) -> tuple[str, str]:
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """AWS Lambda entry point: generate SQL data-quality tests for the job passed in the event.
+    """AWS Lambda entry point: generate plain-English data-quality test case descriptions for the job in the event.
 
     Expected event shape (e.g. as a Lambda console test event):
         {
@@ -165,9 +166,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         context: The Lambda context object (unused, required by the Lambda runtime contract).
 
     Returns:
-        A dict with "source_filename" and "generated_sql" keys. Errors are not caught
-        here: they propagate so the invocation shows as a failed execution with a full
-        traceback in CloudWatch Logs, which is the standard way to debug a Lambda.
+        A dict with "source_filename" and "generated_test_cases" keys. Errors are not
+        caught here: they propagate so the invocation shows as a failed execution with
+        a full traceback in CloudWatch Logs, which is the standard way to debug a Lambda.
     """
     source_filename, source_code = parse_event(event)
     logger.info("Received job: %s (%d chars)", source_filename, len(source_code))
@@ -175,7 +176,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     prompt = build_prompt(source_code)
 
     logger.info("Invoking Bedrock model %s in %s", BEDROCK_MODEL_ID, AWS_REGION)
-    generated_sql = invoke_bedrock(prompt)
-    logger.info("Received response from Bedrock (%d chars)", len(generated_sql))
+    generated_test_cases = invoke_bedrock(prompt)
+    logger.info("Received response from Bedrock (%d chars)", len(generated_test_cases))
 
-    return {"source_filename": source_filename, "generated_sql": generated_sql}
+    return {"source_filename": source_filename, "generated_test_cases": generated_test_cases}
