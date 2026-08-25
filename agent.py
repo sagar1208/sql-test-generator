@@ -6,6 +6,7 @@ Three-pass reasoning pipeline using AWS Bedrock:
   3. Self-Critique: Validate and refine test cases
 """
 
+import json
 import logging
 from llm_client import LLMClient
 import prompts
@@ -132,3 +133,36 @@ def invoke(payload: dict) -> dict:
     except Exception as e:
         logger.error("Unexpected error during test case generation: %s", e)
         return {"error": f"Unexpected error: {str(e)}"}
+
+
+def lambda_handler(event: dict, context=None) -> dict:
+    """Lambda entrypoint. Accepts a direct payload or an API Gateway event.
+
+    Direct invoke:  {"sql": "...", "context": "..."}
+    API Gateway:    {"body": "{\\"sql\\": \\"...\\"}", ...}  -> HTTP response
+    """
+    is_http = isinstance(event, dict) and "body" in event
+
+    if is_http:
+        body = event.get("body") or "{}"
+        try:
+            payload = json.loads(body) if isinstance(body, str) else body
+        except json.JSONDecodeError:
+            return {
+                "statusCode": 400,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"error": "Request body is not valid JSON"}),
+            }
+    else:
+        payload = event if isinstance(event, dict) else {}
+
+    result = invoke(payload)
+
+    if not is_http:
+        return result
+
+    return {
+        "statusCode": 400 if "error" in result else 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(result),
+    }
