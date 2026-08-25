@@ -1,25 +1,17 @@
-"""AWS Bedrock AgentCore entrypoint for SQL data quality test case generation.
+"""AWS Lambda handler for SQL data quality test case generation.
 
-Three-pass reasoning pipeline:
+Three-pass reasoning pipeline using AWS Bedrock:
   1. Understand: Analyze SQL query structure and intent
   2. Generate: Create plain-English test cases
   3. Self-Critique: Validate and refine test cases
 """
 
-import os
 import logging
-from bedrock_agentcore import BedrockAgentCoreApp
-from dotenv import load_dotenv
-
 from llm_client import LLMClient
 import prompts
 
-load_dotenv(dotenv_path=".env.local")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-app = BedrockAgentCoreApp()
 
 
 def _validate_payload(payload: dict) -> tuple[bool, str | None]:
@@ -93,11 +85,10 @@ def _run_pipeline(sql: str, context: str = "") -> tuple[str, str]:
     return query_analysis, refined_cases
 
 
-@app.entrypoint
 def invoke(payload: dict) -> dict:
-    """Bedrock AgentCore entrypoint for SQL test case generation.
+    """AWS Lambda handler for SQL test case generation.
 
-    Expected payload:
+    Expected payload (from API Gateway or Lambda invoke):
     {
         "sql": "SELECT ... FROM ... WHERE ...",
         "context": "Optional business context string"
@@ -141,7 +132,3 @@ def invoke(payload: dict) -> dict:
     except Exception as e:
         logger.error("Unexpected error during test case generation: %s", e)
         return {"error": f"Unexpected error: {str(e)}"}
-
-
-if __name__ == "__main__":
-    app.run()

@@ -1,29 +1,29 @@
-"""Groq LLM client for invoking the language model."""
+"""AWS Bedrock LLM client for invoking language models."""
 
-import os
-from groq import Groq
+import json
+import boto3
 
 
 class LLMClient:
-    """Wrapper for Groq API calls."""
+    """Wrapper for AWS Bedrock API calls."""
 
-    def __init__(self, api_key: str | None = None, model: str = "openai/gpt-oss-120b"):
-        """Initialize Groq client.
+    def __init__(self, region: str = "us-east-1", model: str = "amazon.nova-pro-v1:0"):
+        """Initialize Bedrock client.
 
         Args:
-            api_key: Groq API key. If not provided, will read from GROQ_API_KEY env var.
-            model: Model ID to use. Defaults to mixtral-8x7b-32768.
+            region: AWS region for Bedrock. Defaults to us-east-1.
+            model: Model ID to use. Defaults to amazon.nova-pro-v1:0.
+                   Other options:
+                   - amazon.nova-micro-v1:0 (fastest, cheapest)
+                   - amazon.nova-lite-v1:0 (balanced)
+                   - amazon.nova-pro-v1:0 (most capable)
+                   - anthropic.claude-3-5-sonnet-20241022-v2:0 (Claude Sonnet)
         """
-        if not api_key:
-            api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("GROQ_API_KEY not found in environment variables")
-
-        self.client = Groq(api_key=api_key)
+        self.client = boto3.client("bedrock-runtime", region_name=region)
         self.model = model
 
     def invoke(self, prompt: str) -> str:
-        """Invoke the model with a prompt and return the text response.
+        """Invoke the Bedrock model with a prompt and return the text response.
 
         Args:
             prompt: The prompt to send to the model.
@@ -34,14 +34,32 @@ class LLMClient:
         Raises:
             ValueError: If the response is empty or malformed.
         """
-        message = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=2048,
-        )
+        request_body = {
+            "schemaVersion": "1.0",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "inferenceConfig": {
+                "temperature": 0.3,
+                "maxTokens": 2048,
+            },
+        }
 
-        if not message.choices or not message.choices[0].message.content:
-            raise ValueError("Empty response from Groq API")
+        try:
+            response = self.client.invoke_model(
+                modelId=self.model,
+                body=json.dumps(request_body),
+            )
 
-        return message.choices[0].message.content
+            response_body = json.loads(response["body"].read())
+
+            if "content" not in response_body or not response_body["content"]:
+                raise ValueError("Empty response from Bedrock API")
+
+            return response_body["content"][0]["text"]
+
+        except Exception as e:
+            raise ValueError(f"Bedrock invocation failed: {str(e)}") from e
