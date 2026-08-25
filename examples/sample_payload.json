@@ -1,0 +1,4 @@
+{
+  "sql": "SELECT u.user_id, u.email, COUNT(o.order_id) as order_count, SUM(o.amount) as total_spent, CASE WHEN SUM(o.amount) > 1000 THEN 'high_value' WHEN SUM(o.amount) > 100 THEN 'medium_value' ELSE 'low_value' END as customer_segment FROM users u LEFT JOIN orders o ON u.user_id = o.user_id WHERE u.created_at >= '2024-01-01' AND o.order_date IS NOT NULL GROUP BY u.user_id, u.email HAVING COUNT(o.order_id) > 0",
+  "context": "This query segments customers by their lifetime spending. It pulls from a Salesforce user table and a data warehouse orders table. Results feed into a marketing campaign targeting system. Customers with NULL order_date values should be excluded, and we expect at least 80% of active users to have at least one order."
+}

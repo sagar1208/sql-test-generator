@@ -1,6 +1,5 @@
 .venv/
 .env
+.env.local
 __pycache__/
 *.pyc
-generated_tests/*
-!generated_tests/.gitkeep

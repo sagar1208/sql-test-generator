@@ -8,7 +8,8 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "boto3>=1.43.79",
+    "groq>=0.4.0",
+    "bedrock-agentcore>=1.0.0",
     "python-dotenv>=1.2.3",
 ]
 
