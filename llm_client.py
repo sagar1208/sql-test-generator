@@ -22,11 +22,16 @@ class LLMClient:
             or "eu-central-1"
         )
  
-        self.model = (
-            model
-            or os.environ.get("BEDROCK_MODEL_ID")
-        )
- 
+        # Accepts a model ID, an inference-profile ID, or a profile ARN.
+        self.model = model or os.environ.get("BEDROCK_MODEL_ID")
+
+        if not self.model:
+            raise ValueError(
+                "No Bedrock model configured. Set the BEDROCK_MODEL_ID environment "
+                "variable, for example:\n"
+                "  export BEDROCK_MODEL_ID=eu.amazon.nova-pro-v1:0"
+            )
+
         self.client = boto3.client(
             "bedrock-runtime",
             region_name=self.region,

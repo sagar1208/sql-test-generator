@@ -309,4 +309,4 @@ def main() -> int:
  
  
 if __name__ == "__main__":
-    raise SystemExit(main())"""Local CLI for SQL data-quality test-case generation.
+    raise SystemExit(main())
