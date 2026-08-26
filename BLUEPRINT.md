@@ -7,7 +7,8 @@ SQL query, using a three-pass reasoning pipeline powered by AWS Bedrock.
 
 ## Architecture
 
-Three sequential Bedrock calls, each feeding the next.
+Three sequential Bedrock calls, each feeding the next. The passes below are the
+defaults defined in [agent.yaml](agent.yaml) and can be edited or extended there.
 
 **Pass 1: Understand**
 - Analyzes SQL query structure and intent
@@ -32,8 +33,9 @@ Three sequential Bedrock calls, each feeding the next.
 ```
 .
 ├── agent.py                   # CLI entrypoint and pipeline orchestration
+├── agent.yaml                 # Agent definition: model settings and prompts
+├── config.py                  # agent.yaml loader and validation
 ├── llm_client.py              # AWS Bedrock Converse API wrapper
-├── prompts.py                 # Three prompt templates
 ├── requirements.txt           # Python dependencies
 ├── examples/
 │   └── sample_payload.json    # Sample input payload
@@ -68,33 +70,52 @@ error dict by `invoke`.
 ### llm_client.py
 
 **Class:** `LLMClient`
-- `__init__(region: str | None = None, model: str | None = None)`
+- `__init__(region: str | None = None, model: str | None = None, settings: dict | None = None)`
+  where `settings` is a resolved `bedrock` block from `agent.yaml`
 - `invoke(prompt: str) -> str`
 
 **API:** Bedrock Converse (`bedrock-runtime.converse`), chosen over `invoke_model`
 because the request and response shapes are identical across Nova, Claude, and Llama.
 
 **Configuration resolution:**
-- Region: argument → `AWS_REGION` → `AWS_DEFAULT_REGION` → `eu-central-1`
-- Model: argument → `BEDROCK_MODEL_ID` → error. No default, so no account-specific
+- Region: argument → `AWS_REGION` → `AWS_DEFAULT_REGION` → `agent.yaml` → `eu-central-1`
+- Model: argument → `BEDROCK_MODEL_ID` → `agent.yaml` → error. No account-specific
   identifier is baked into the source.
 
-**Inference config:** `maxTokens: 4096`, reasoning disabled via
-`additionalModelRequestFields={"thinking": {"type": "disabled"}}`.
+**Inference config:** `maxTokens` and `temperature` from `agent.yaml`; reasoning
+disabled via `additionalModelRequestFields={"thinking": {"type": "disabled"}}` unless
+`thinking` is set otherwise.
+
+**Retries:** botocore `adaptive` mode, `max_attempts` from `agent.yaml`, so Bedrock
+throttling is retried with backoff rather than failing the run.
 
 **Failures:** Raises `ValueError`. Invocation errors include the region and model in
 the message; empty-content errors include `stopReason` and the content block types.
 
-### prompts.py
+### agent.yaml
 
-**Constants:** `UNDERSTAND_PROMPT`, `GENERATE_PROMPT`, `SELF_CRITIQUE_PROMPT`
+The agent definition. Holds model settings and the prompt for every pass, so prompt
+changes need no code edit.
 
-**Template variables:** `{sql}`, `{context}`, `{query_analysis}` (pass 1 output, used
-by pass 2), `{generated_cases}` (pass 2 output, used by pass 3)
+- `bedrock`: `region`, `model_id`, `max_tokens`, `temperature`, `thinking`, `retries`
+- `pipeline`: ordered list of passes, each with `name`, `description`, `prompt`, and
+  optional overrides of any `bedrock` key
+
+**Template variables:** `{sql}`, `{context}`, `{query_analysis}` (first pass output),
+`{generated_cases}` (preceding pass output)
+
+**Precedence:** constructor argument → environment variable → `agent.yaml`
+
+### config.py
+
+Loads and validates `agent.yaml` into `AgentConfig` and `Pass` objects. Raises
+`ValueError` naming the file for a missing config, malformed YAML, an empty pipeline,
+a pass without a prompt, or a prompt referencing an unknown placeholder.
 
 ### requirements.txt
 
-- `boto3>=1.43.0` — Bedrock client, the only runtime dependency
+- `boto3>=1.43.0` — Bedrock client
+- `PyYAML>=6.0` — parses `agent.yaml`
 
 ### examples/sample_payload.json
 
@@ -108,7 +129,7 @@ expected data characteristics.
 2. AWS credentials that `aws sts get-caller-identity` accepts
 3. Bedrock model access granted **in the region being called** — access is per-region
 4. IAM permission for `bedrock:InvokeModel`
-5. `BEDROCK_MODEL_ID` exported — there is no default model
+5. A model set in `agent.yaml`, or `BEDROCK_MODEL_ID` exported to override it
 
 ## Running
 
@@ -143,14 +164,13 @@ See [README.md](README.md) for the full set of invocation forms.
 - Three sequential model calls per query — latency scales with query complexity
 - Test cases are descriptive only; SQL generation is out of scope
 - No persistence of history or results
-- No retry or backoff on Bedrock throttling
 
 ## Environment Variables
 
 | Variable | Required | Example | Purpose |
 |---|---|---|---|
-| `AWS_REGION` | No | `eu-central-1` | Bedrock region; falls back to `AWS_DEFAULT_REGION`, then `eu-central-1` |
-| `BEDROCK_MODEL_ID` | Yes | `eu.amazon.nova-pro-v1:0` | Model ID, inference-profile ID, or profile ARN |
+| `AWS_REGION` | No | `eu-central-1` | Overrides `bedrock.region`; then `AWS_DEFAULT_REGION`, then `agent.yaml` |
+| `BEDROCK_MODEL_ID` | No | `eu.amazon.nova-pro-v1:0` | Overrides `bedrock.model_id` in `agent.yaml` |
 | AWS credentials | Yes | — | Standard boto3 resolution (`~/.aws/credentials`, env vars, instance role) |
 
 ---

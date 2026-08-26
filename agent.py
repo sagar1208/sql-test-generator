@@ -20,8 +20,8 @@ import sys
 from pathlib import Path
 from typing import Optional
  
+import config
 from llm_client import LLMClient
-import prompts
  
  
 logging.basicConfig(
@@ -50,72 +50,82 @@ def _validate_payload(payload: dict) -> tuple[bool, Optional[str]]:
  
  
 def _run_pipeline(sql: str, context: str = "") -> tuple[str, str]:
-    """Execute the three-pass reasoning pipeline.
- 
+    """Execute the pipeline defined in agent.yaml.
+
+    Passes run in the order listed under `pipeline`. Each pass receives the
+    output of the previous one, so prompts may reference {query_analysis} and
+    {generated_cases} as well as {sql} and {context}.
+
     Args:
         sql: SQL query to analyze.
         context: Optional business context.
- 
+
     Returns:
-        Tuple containing the query analysis and refined test cases.
- 
+        Tuple containing the query analysis and the refined test cases.
+
     Raises:
-        RuntimeError: If initialization or an LLM invocation fails.
+        RuntimeError: If configuration, initialization, or an LLM call fails.
     """
     try:
-        llm = LLMClient()
-    except Exception as exc:
-        raise RuntimeError(f"Failed to initialize LLM client: {exc}") from exc
- 
-    # Pass 1: Understand
-    logger.info("Pass 1: Understanding SQL query structure...")
-    understand_prompt = prompts.UNDERSTAND_PROMPT.format(
-        sql=sql,
-        context=context,
-    )
- 
-    try:
-        query_analysis = llm.invoke(understand_prompt)
-    except Exception as exc:
-        raise RuntimeError(f"Pass 1 (Understand) failed: {exc}") from exc
- 
-    if not query_analysis or not query_analysis.strip():
-        raise RuntimeError("Pass 1 (Understand) produced an empty response")
- 
-    # Pass 2: Generate
-    logger.info("Pass 2: Generating test cases...")
-    generate_prompt = prompts.GENERATE_PROMPT.format(
-        sql=sql,
-        context=context,
-        query_analysis=query_analysis,
-    )
- 
-    try:
-        test_cases = llm.invoke(generate_prompt)
-    except Exception as exc:
-        raise RuntimeError(f"Pass 2 (Generate) failed: {exc}") from exc
- 
-    if not test_cases or not test_cases.strip():
-        raise RuntimeError("Pass 2 (Generate) produced an empty response")
- 
-    # Pass 3: Self-Critique
-    logger.info("Pass 3: Self-critiquing and refining test cases...")
-    critique_prompt = prompts.SELF_CRITIQUE_PROMPT.format(
-        generated_cases=test_cases,
-        sql=sql,
-    )
- 
-    try:
-        refined_cases = llm.invoke(critique_prompt)
-    except Exception as exc:
-        raise RuntimeError(f"Pass 3 (Self-Critique) failed: {exc}") from exc
- 
-    if not refined_cases or not refined_cases.strip():
-        raise RuntimeError("Pass 3 (Self-Critique) produced an empty response")
- 
-    return query_analysis.strip(), refined_cases.strip()
- 
- 
+        agent_config = config.load()
+    except ValueError as exc:
+        raise RuntimeError(f"Failed to load agent config: {exc}") from exc
+
+    # Variables accumulate as passes complete.
+    variables = {
+        "sql": sql,
+        "context": context,
+        "query_analysis": "",
+        "generated_cases": "",
+    }
+
+    outputs: dict[str, str] = {}
+    clients: dict[str, LLMClient] = {}
+
+    for index, pipeline_pass in enumerate(agent_config.passes, start=1):
+        logger.info(
+            "Pass %d (%s): %s",
+            index,
+            pipeline_pass.name,
+            pipeline_pass.description or "running",
+        )
+
+        # Reuse one client per distinct model so per-pass overrides work.
+        model_id = pipeline_pass.bedrock.get("model_id", "")
+        if model_id not in clients:
+            try:
+                clients[model_id] = LLMClient(settings=pipeline_pass.bedrock)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to initialize LLM client: {exc}") from exc
+
+        prompt = pipeline_pass.render(**variables)
+
+        try:
+            output = clients[model_id].invoke(prompt)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Pass {index} ({pipeline_pass.name}) failed: {exc}"
+            ) from exc
+
+        if not output or not output.strip():
+            raise RuntimeError(
+                f"Pass {index} ({pipeline_pass.name}) produced an empty response"
+            )
+
+        output = output.strip()
+        outputs[pipeline_pass.name] = output
+
+        # Feed this pass's output forward under both names, so a renamed or
+        # reordered pipeline still resolves the documented placeholders.
+        variables["query_analysis"] = variables["query_analysis"] or output
+        variables["generated_cases"] = output
+
+    summary = outputs.get(agent_config.passes[0].name, "")
+    final = outputs[agent_config.passes[-1].name]
+
+    return summary, final
+
+
 def invoke(payload: dict) -> dict:
     """Generate SQL data-quality test cases locally.
  

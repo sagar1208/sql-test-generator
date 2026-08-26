@@ -71,6 +71,39 @@ A JSON payload has a required `sql` field and an optional `context` field — se
 [examples/sample_payload.json](examples/sample_payload.json). Pass an array of these
 objects to `--input` to process several queries in one run.
 
+## Editing the prompts
+
+The prompts and model settings live in [agent.yaml](agent.yaml). Edit them there —
+no code change, no redeploy of logic.
+
+```yaml
+bedrock:
+  model_id: eu.amazon.nova-pro-v1:0
+  max_tokens: 4096
+  temperature: 0.3
+
+pipeline:
+  - name: understand
+    prompt: |
+      Analyze the following SQL query...
+```
+
+Passes run top to bottom, each receiving the previous one's output. Prompts may use
+`{sql}`, `{context}`, `{query_analysis}` (output of the first pass), and
+`{generated_cases}` (output of the preceding pass).
+
+Any `bedrock` key can be overridden per pass — useful for running the cheap analysis
+pass on a smaller model:
+
+```yaml
+  - name: understand
+    model_id: eu.amazon.nova-lite-v1:0
+    prompt: |
+      ...
+```
+
+Add or remove passes freely; the pipeline is driven entirely by this list.
+
 ## Region and model
 
 Both are read from the environment, so no code change is needed to switch.

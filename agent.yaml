@@ -1,0 +1,87 @@
+# Agent definition: model settings and prompts for the three-pass pipeline.
+#
+# Edit prompts here — no code change needed. Environment variables
+# (BEDROCK_MODEL_ID, AWS_REGION) still override the `bedrock` block below.
+
+name: sql-test-generator
+description: Generates plain-English data quality test cases from SQL queries.
+
+bedrock:
+  region: eu-central-1
+  model_id: eu.amazon.nova-pro-v1:0
+  max_tokens: 4096
+  temperature: 0.3
+  # Reasoning tokens crowd out the text response on some models.
+  thinking: disabled
+  retries:
+    max_attempts: 5
+    mode: adaptive
+
+pipeline:
+  # Passes run in this order. Each may override any `bedrock` key above —
+  # e.g. run the cheap analysis pass on a smaller model.
+  - name: understand
+    description: Analyze SQL query structure and intent
+    # model_id: eu.amazon.nova-lite-v1:0
+    prompt: |
+      Analyze the following SQL query and describe its key components in plain English.
+
+      Identify:
+      1. The target table(s) being written to
+      2. Key columns and their purposes
+      3. Source table(s) being read from
+      4. Main transformations (joins, aggregations, filters, case statements)
+      5. Business logic being implemented
+
+      SQL Query:
+      {sql}
+
+      Context (optional):
+      {context}
+
+      Provide a concise summary of what this query does, without suggesting test cases yet.
+
+  - name: generate
+    description: Create plain-English data quality test cases
+    prompt: |
+      Based on this SQL query and its analysis, generate 3-6 plain-English data quality test cases.
+
+      For each test case, describe:
+      - The table and column(s) being tested
+      - The specific risk or condition being checked (null checks, duplicates, referential integrity, row-count sanity, type mismatches, date range validity)
+      - What would count as a test failure
+
+      Do NOT write any SQL code. Return only plain English descriptions.
+
+      SQL Query:
+      {sql}
+
+      Context (optional):
+      {context}
+
+      Query Analysis:
+      {query_analysis}
+
+      Generate the test cases as a numbered list.
+
+  - name: critique
+    description: Validate and refine the generated test cases
+    prompt: |
+      Review these generated data quality test cases and refine them if needed.
+
+      Evaluate whether:
+      1. Each test case is specific to the given query (not generic boilerplate)
+      2. The test cases cover structural risks (schema, null/type issues)
+      3. The test cases cover referential integrity risks (joins, lookups)
+      4. The test cases cover business logic risks (calculations, thresholds, row counts)
+      5. All test cases are described in plain English with no SQL code
+
+      If improvements are needed, refine the test cases. Otherwise, return them as-is.
+
+      Original Test Cases:
+      {generated_cases}
+
+      SQL Query (for reference):
+      {sql}
+
+      Return the final refined test cases as a numbered list in plain English.
