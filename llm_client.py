@@ -1,52 +1,87 @@
 """AWS Bedrock LLM client for invoking language models."""
-
+ 
 import os
+from typing import Optional
+ 
 import boto3
-
-
+ 
+ 
 class LLMClient:
-    """Wrapper for AWS Bedrock API calls (Converse API)."""
-
-    def __init__(self, region: str | None = None, model: str | None = None):
-        """Initialize Bedrock client.
-
-        Args:
-            region: AWS region for Bedrock. Falls back to $AWS_REGION, then us-east-1.
-            model: Model ID to use. Falls back to $BEDROCK_MODEL_ID, then
-                   us.amazon.nova-pro-v1:0. Other options:
-                   - us.amazon.nova-micro-v1:0 (fastest, cheapest)
-                   - us.amazon.nova-lite-v1:0 (balanced)
-                   - us.amazon.nova-pro-v1:0 (most capable)
-                   - us.anthropic.claude-3-5-sonnet-20241022-v2:0 (Claude Sonnet)
-        """
-        self.region = region or os.environ.get("AWS_REGION", "us-east-1")
-        self.model = model or os.environ.get(
-            "BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0"
+    """Wrapper for AWS Bedrock API calls using the Converse API."""
+ 
+    def __init__(
+        self,
+        region: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        """Initialize the Amazon Bedrock client."""
+        self.region = (
+            region
+            or os.environ.get("AWS_REGION")
+            or os.environ.get("AWS_DEFAULT_REGION")
+            or "eu-central-1"
         )
-        self.client = boto3.client("bedrock-runtime", region_name=self.region)
-
+ 
+        self.model = (
+            model
+            or os.environ.get("BEDROCK_MODEL_ID")
+            or "arn:aws:bedrock:eu-central-1:492098925493:application-inference-profile/4olq2nnbqrk1"
+        )
+ 
+        self.client = boto3.client(
+            "bedrock-runtime",
+            region_name=self.region,
+        )
+ 
     def invoke(self, prompt: str) -> str:
-        """Invoke the Bedrock model with a prompt and return the text response.
-
-        Args:
-            prompt: The prompt to send to the model.
-
-        Returns:
-            The text content of the model's response.
-
-        Raises:
-            ValueError: If the response is empty or malformed.
-        """
+        """Invoke the Bedrock model and return its text response."""
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("Prompt must be a non-empty string")
+ 
         try:
             response = self.client.converse(
                 modelId=self.model,
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
-                inferenceConfig={"temperature": 0.3, "maxTokens": 2048},
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"text": prompt}],
+                    }
+                ],
+                inferenceConfig={
+                    "maxTokens": 4096,
+                },
+                additionalModelRequestFields={
+                    "thinking": {"type": "disabled"},
+                },
             )
-        except Exception as e:
-            raise ValueError(f"Bedrock invocation failed: {str(e)}") from e
-
+        except Exception as exc:
+            raise ValueError(
+                f"Bedrock invocation failed in region '{self.region}' using model "
+                f"'{self.model}': {exc}"
+            ) from exc
+ 
         try:
-            return response["output"]["message"]["content"][0]["text"]
-        except (KeyError, IndexError) as e:
-            raise ValueError(f"Unexpected Bedrock response shape: {response}") from e
+            content = response["output"]["message"]["content"]
+            text = next(
+                item["text"]
+                for item in content
+                if isinstance(item, dict) and item.get("text")
+            )
+        except (KeyError, StopIteration, TypeError) as exc:
+            stop_reason = response.get("stopReason", "unknown")
+            content_types = [
+                next(iter(item), "unknown")
+                for item in content
+                if isinstance(item, dict)
+            ] if "content" in locals() and isinstance(content, list) else []
+            raise ValueError(
+                "Bedrock returned no text content (stopReason='{}', "
+                "contentTypes={}). Disable reasoning or increase maxTokens."
+                .format(stop_reason, content_types)
+            ) from exc
+ 
+        if not text or not text.strip():
+            raise ValueError("Bedrock returned an empty response")
+ 
+        return text
+ 
