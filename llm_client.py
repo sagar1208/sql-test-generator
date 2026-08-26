@@ -25,7 +25,6 @@ class LLMClient:
         self.model = (
             model
             or os.environ.get("BEDROCK_MODEL_ID")
-            or "arn:aws:bedrock:eu-central-1:492098925493:application-inference-profile/4olq2nnbqrk1"
         )
  
         self.client = boto3.client(
