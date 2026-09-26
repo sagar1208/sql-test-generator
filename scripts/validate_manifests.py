@@ -53,8 +53,6 @@ REQUIRED_TOP_LEVEL = (
     "memory",
     "environment",
     "iam",
-    "limits",
-    "prompts",
 )
 
 REQUIRED_ENV = (
@@ -194,7 +192,7 @@ def _check_sizing(report: Report, data: Mapping[str, Any]) -> None:
         report.fail("resources.ephemeral_storage_mib", "must be a whole number of at least 512")
 
     timeouts = _block(report, data, "timeouts")
-    for key in ("request_seconds", "session_idle_seconds", "bedrock_connect_seconds", "bedrock_read_seconds"):
+    for key in ("request_seconds", "session_idle_seconds"):
         if not _is_int(timeouts.get(key)):
             report.fail(f"timeouts.{key}", "must be a whole number of seconds")
 

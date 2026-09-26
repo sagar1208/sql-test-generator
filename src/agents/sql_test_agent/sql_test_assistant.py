@@ -1,4 +1,4 @@
-""Plain-English data-quality test cases for SQL, AWS Glue and Airflow sources.
+"""Plain-English data-quality test cases for SQL, AWS Glue and Airflow sources.
  
 One model call per request: the agent reads the supplied source and writes test
 cards naming only tables a developer can still query after the job has run.
@@ -266,30 +266,47 @@ def _split_cards(text: str) -> list[str]:
     return cards
  
  
+# Sections whose body sits on the lines below the heading rather than after a colon.
+BLOCK_HEADINGS = ("What to test", "Pass criteria", "Failure means")
+FIELD_LABELS = (
+    "Category",
+    "Priority",
+    "Source table",
+    "Target table",
+    "Key columns",
+) + BLOCK_HEADINGS
+LABEL_PATTERN = re.compile(
+    r"^\s*(?:" + "|".join(re.escape(label) for label in FIELD_LABELS) + r")\s*(?::|$)",
+    re.IGNORECASE,
+)
+
+
 def _section_value(card: str, heading: str) -> str:
-    if heading in {"What to test", "Pass criteria", "Failure means"}:
-        heading_pattern = re.compile(
-            r"^\s*" + re.escape(heading) + r"\s*:?\s*$", re.IGNORECASE
-        )
-    else:
-        heading_pattern = re.compile(
-            r"^\s*" + re.escape(heading) + r"\s*:\s*(.*)$", re.IGNORECASE
-        )
+    # "Heading" alone on its line, or "Heading: value" on one line.
+    pattern = re.compile(
+        r"^\s*" + re.escape(heading) + r"\s*(?::\s*(.*))?$", re.IGNORECASE
+    )
     lines = card.splitlines()
     for index, line in enumerate(lines):
-        match = heading_pattern.match(line)
-        if match:
-            value = match.group(1).strip() if match.lastindex else ""
-            if value:
-                return value
-            following = []
-            for continuation in lines[index + 1:]:
-                if not continuation.strip():
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = (match.group(1) or "").strip()
+        if value or heading not in BLOCK_HEADINGS:
+            return value
+        # The body follows on the next lines, indented or not. The prompt asks
+        # for it unindented, so indentation cannot be what marks it. Skip a
+        # blank line after the heading; stop at the next blank line or label.
+        body = []
+        for following in lines[index + 1:]:
+            if not following.strip():
+                if body:
                     break
-                if not continuation.startswith((" ", "\t")):
-                    break
-                following.append(continuation.strip())
-            return " ".join(following)
+                continue
+            if LABEL_PATTERN.match(following):
+                break
+            body.append(following.strip())
+        return " ".join(body)
     return ""
  
  
