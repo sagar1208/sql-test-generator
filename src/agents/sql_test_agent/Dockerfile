@@ -34,6 +34,8 @@ COPY src/agents/agents_base/tina_agent_base ./tina_agent_base
 # agent.yaml must sit next to the module: config.load_settings() looks for it
 # there, and the prompts and limits live in it.
 COPY src/agents/sql_test_agent/sql_test_assistant.py ./sql_test_assistant.py
+# Imported by sql_test_assistant.py as a top-level module, so it sits beside it.
+COPY src/agents/sql_test_agent/session_memory.py ./session_memory.py
 COPY src/agents/sql_test_agent/agent.yaml ./agent.yaml
 
 # Non-root. The runtime never needs root, and a prompt-injected model response

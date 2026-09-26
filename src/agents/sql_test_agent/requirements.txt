@@ -6,7 +6,9 @@
 # build pipeline rather than here.
 
 # AgentCore Runtime server (POST /invocations, GET /ping) and the Memory client.
-bedrock-agentcore>=0.1.2
+# The floor is the release session_memory.py was checked against: it relies on
+# MemoryClient.create_event accepting `metadata`.
+bedrock-agentcore>=1.23.1
 
 # The agent loop and BedrockModel.
 strands-agents>=1.0.0

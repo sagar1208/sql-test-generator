@@ -16,6 +16,8 @@ from botocore.config import Config
 from strands import Agent
 from strands.models import BedrockModel
 from strands.types.exceptions import MaxTokensReachedException
+
+import session_memory
  
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -249,6 +251,24 @@ of the correction. Use no temporary object in Source table or Target table.
 Use only table names that appear in the supplied source. Keep at most
 {max_cards} cards and keep each card under {max_words} words.
 """
+
+# The latest answer saved in session memory for this session. It is nonce-tagged
+# like the source, because memory was written from earlier, untrusted input.
+HISTORY_PROMPT = """You wrote the test cases below for this job on {saved_at}.
+{change_note}
+Keep at most {max_cards} test cases in total.
+
+<{nonce}:previous_test_cases>
+{previous_test_cases}
+</{nonce}:previous_test_cases>
+"""
+
+SOURCE_CHANGED_NOTE = """The source has changed since then. Keep the ID and wording of every
+test case that still applies, drop any the change has made irrelevant, and add
+new ones for new risks, numbered after the highest earlier ID."""
+
+SOURCE_UNCHANGED_NOTE = """The source has not changed since then. Return the same test cases
+with the same IDs, correcting only a test case that is wrong."""
  
  
 def _split_cards(text: str) -> list[str]:
@@ -386,7 +406,12 @@ def _validate_cards(text: str, source: str) -> list[str]:
     return errors
  
  
-def generate(source: str, context: str, session_id: str = "") -> str:
+def generate(
+    source: str,
+    context: str,
+    session_id: str = "",
+    previous: session_memory.PreviousRun | None = None,
+) -> str:
     """One model call, returning the test cards as markdown."""
     if not MODEL_ID:
         raise ValueError(
@@ -417,6 +442,20 @@ def generate(source: str, context: str, session_id: str = "") -> str:
         max_words=CARD_WORD_TARGET,
         out_of_scope=OUT_OF_SCOPE,
     )
+
+    # Added before the first call, so a repair call sees the earlier test cases too.
+    if previous:
+        prompt += "\n" + HISTORY_PROMPT.format(
+            nonce=nonce,
+            # Date only: the model needs no more, and it avoids the time zone
+            # the timestamp happens to come back in.
+            saved_at=previous.saved_at.strftime("%Y-%m-%d"),
+            change_note=(
+                SOURCE_CHANGED_NOTE if previous.source_changed else SOURCE_UNCHANGED_NOTE
+            ),
+            max_cards=MAX_CARDS,
+            previous_test_cases=previous.test_cases,
+        )
  
     def ask(model_prompt: str) -> str:
         # A new Agent per attempt keeps repair instructions separate from the
@@ -478,13 +517,22 @@ def invoke(payload: dict) -> dict:
     except InvalidPayload as exc:
         return {"error": str(exc), **echo}
  
+    # Never raises: with memory off or unavailable this is None and the request
+    # runs exactly as it would without memory.
+    previous = session_memory.safe_load(session_id, source)
+
     logger.info("Generating test cases from %d characters of source", len(source))
     try:
-        cards = generate(source, context, session_id)
+        cards = generate(source, context, session_id, previous)
     except Exception as exc:
         logger.exception("Request failed")
         return {"error": str(exc), **echo}
  
+    # generate() only returns validated test cases, so only those are remembered.
+    # An out-of-scope reply has nothing to continue from.
+    if cards.strip() != OUT_OF_SCOPE:
+        session_memory.safe_save(session_id, source, cards)
+
     logger.info("Done: %d characters of test cases", len(cards))
     return {"test_cases_markdown": cards, **echo}
  
