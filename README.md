@@ -26,8 +26,6 @@ tmnl-tina-pipeline-bi-agents/
 │   └── inference_profile/
 │
 ├── tf_roots/
-│   ├── anomaly_detector_agent/
-│   ├── sql_generator_agent/
 │   ├── sql_test_agent/
 │   └── shared/
 │

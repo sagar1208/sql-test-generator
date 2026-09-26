@@ -1,0 +1,37 @@
+# Copy to terraform.tfvars and edit. Nothing here is secret: the account id is
+# discovered from the caller's credentials and the model comes from the shared
+# root, so there is no ARN to paste in the usual case.
+
+region      = "eu-central-1"
+environment = "dev"
+
+# Pin a real tag for anything past dev. AgentCore resolves the tag once, at
+# CreateAgentRuntime, and never looks again -- so `latest` deploys whatever was
+# pushed at apply time and then silently stays on it.
+image_tag = "latest"
+
+# Where tf_roots/shared keeps its state. The inference profile ARN is read from
+# it, which is the normal wiring.
+shared_state = {
+  bucket = "tmnl-tina-tfstate-000000000000"
+  key    = "tmnl-tina-pipeline-bi-agents/shared/terraform.tfstate"
+  region = "eu-central-1"
+}
+
+# Alternative to shared_state: apply against an inference profile that already
+# exists. Useful for a developer sandbox, or when the shared root lives in
+# another account.
+# inference_profile_arn = "arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/abcd1234efgh"
+
+log_retention_days = 30
+lambda_memory_mib  = 512
+
+# A function URL is a smoke-test convenience. Real clients should arrive through
+# an API Gateway in front of the Lambda.
+create_function_url = false
+
+cost_center = "bi-platform"
+
+tags = {
+  Owner = "bi-platform-team"
+}

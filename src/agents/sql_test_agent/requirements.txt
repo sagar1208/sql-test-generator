@@ -1,0 +1,19 @@
+# Runtime dependencies for the sql_test_agent container.
+#
+# Minimum versions, not exact pins: the image is rebuilt from this file on every
+# deploy, and a floor keeps a security fix one rebuild away instead of one
+# version bump plus a review. The lock, when a deploy needs one, belongs in the
+# build pipeline rather than here.
+
+# AgentCore Runtime server (POST /invocations, GET /ping) and the Memory client.
+bedrock-agentcore>=0.1.2
+
+# The agent loop and BedrockModel.
+strands-agents>=1.0.0
+
+# Bedrock client, matching the version floor in the repository root.
+boto3>=1.43.0
+
+# agent.yaml: prompts, limits and model settings. tina_agent_base degrades to
+# its built-in reader without it, but the image should never have to.
+pyyaml>=6.0.1
