@@ -576,3 +576,39 @@ print(json.loads(response["response"].read()))
 Deploy with `terraform -chdir=tf_roots/sql_test_agent apply`, after `tf_roots/shared`. The full
 sequence, log locations and every error message are in
 [`docs/runbook.md`](../../../docs/runbook.md).
+
+
+TC-002 - Bridge join collapses customer mapping via MAX and nullable join key\
+\
+Category     : join correctness\
+Priority     : High\
+Source table : rs_qualified_db.kpn_wba_invoicelines, if_finance.fct_kpn_wba_vispbill_bridge\
+Target table : if_finance.fct_kpn_penalty_invoice\
+Key columns  : technical_service_id, spo_wbaservicegroup, spo_ispcustomerid\
+\
+What to test\
+Check whether multiple spo_ispcustomerid values exist per spo_wbaservicegroup (the MAX() silently picks one), and verify rows where technical_service_id is NULL or has no bridge match, since the LEFT JOIN will produce NULL spo_ispcustomerid for those.\
+\
+Pass criteria\
+Each technical_service_id maps to a confirmed single valid spo_ispcustomerid, and the count of NULL spo_ispcustomerid rows in the target matches the expected count of unmatched technical_service_id values (confirm expected count with business owner).\
+\
+Failure means\
+Invoice lines get silently attributed to the wrong customer, corrupting downstream financial attribution without any error.\
+
+
+"TC-001 - Full table delete without transactional guarantee on rerun\
+\
+Category     : operational\
+Priority     : High\
+Source table : rs_qualified_db.kpn_wba_invoicelines, if_finance.fct_kpn_wba_vispbill_bridge\
+Target table : if_finance.fct_kpn_penalty_invoice\
+Key columns  : invoice_number, period, product_code\
+\
+What to test\
+Confirm that DELETE FROM if_finance.fct_kpn_penalty_invoice and the subsequent INSERT are wrapped in a single transaction or equivalent safeguard, since the DELETE has no WHERE clause and removes all history before the INSERT runs.\
+\
+Pass criteria\
+If the INSERT step fails or returns zero rows, the table must retain its prior data (delete and insert succeed or fail together).\
+\
+Failure means\
+A failed or partial load after the DELETE leaves the finance-facing table empty or incomplete with no automatic rollback, silently breaking downstream reporting.\
