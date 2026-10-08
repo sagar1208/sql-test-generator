@@ -230,15 +230,91 @@ def _split_cards(text: str) -> list[str]:
         cards.append("\n".join(current).strip())
     return cards
 
+# The job map the model writes before its cards: "S<n> | kind | object | quote".
+# Every card cites a step, and every step quotes the source, so a card cannot
+# rest on a step the source does not contain.
+MAP_LINE_PATTERN = re.compile(r"^\s*S(\d+)\s*\|(.*)$", re.IGNORECASE)
+STEP_ID_PATTERN = re.compile(r"\bS(\d+)\b", re.IGNORECASE)
+STEP_KINDS = (
+    "read table",
+    "read file",
+    "read api",
+    "sensor",
+    "transform",
+    "join",
+    "filter",
+    "write",
+    "task dependency",
+)
+# Inputs a query cannot reach, so a card resting on one can only be Technical.
+UNQUERYABLE_KINDS = ("read file", "read api", "sensor")
+MIN_QUOTE_LENGTH = 5
+
+def _split_answer(text: str) -> tuple[str, str]:
+    """The job map and the cards. An answer with no card comes back whole as cards."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if CARD_START_PATTERN.match(line):
+            return "\n".join(lines[:index]).strip(), "\n".join(lines[index:]).strip()
+    return "", text.strip()
+
+def _parse_map(text: str) -> list[dict[str, str]]:
+    steps = []
+    for line in text.splitlines():
+        match = MAP_LINE_PATTERN.match(line)
+        if not match:
+            continue
+        # Two splits only: a quoted SQL fragment may itself contain "|" or "||".
+        fields = [field.strip() for field in match.group(2).split("|", 2)]
+        fields += [""] * (3 - len(fields))
+        steps.append({
+            "step": f"S{int(match.group(1))}",
+            "kind": fields[0].lower(),
+            "object": fields[1],
+            "quote": fields[2].strip("\"'`"),
+        })
+    return steps
+
+def _flatten(text: str) -> str:
+    # Spacing and case differ freely between a quote and its source.
+    return " ".join(text.split()).lower()
+
+def _validate_map(steps: list[dict[str, str]], source: str) -> list[str]:
+    if not steps:
+        return ["No job map was found before the cards."]
+    errors = []
+    seen = set()
+    # A follow-up carries no source to quote from; its tables are not checked either.
+    check_quotes = _is_source_input(source)
+    flat_source = _flatten(source)
+    for step in steps:
+        step_id = step["step"]
+        if step_id in seen:
+            errors.append(f"Duplicate map step {step_id}.")
+        seen.add(step_id)
+        if step["kind"] not in STEP_KINDS:
+            errors.append(
+                f"Map step {step_id} has kind '{step['kind']}'; use one of: {', '.join(STEP_KINDS)}."
+            )
+        if len(step["quote"]) < MIN_QUOTE_LENGTH:
+            errors.append(f"Map step {step_id} has no quote from the source.")
+        elif check_quotes and _flatten(step["quote"]) not in flat_source:
+            errors.append(f"Map step {step_id} quotes text that does not appear in the source.")
+    return errors
+
 # Sections whose body sits on the lines below the heading rather than after a colon.
 BLOCK_HEADINGS = ("What to test", "Pass criteria", "Failure means")
 FIELD_LABELS = (
     "Category",
     "Priority",
+    "Test type",
+    "Run point",
+    "Step",
     "Source table",
     "Target table",
     "Key columns",
 ) + BLOCK_HEADINGS
+TEST_TYPES = ("functional", "technical")
 LABEL_PATTERN = re.compile(
     r"^\s*(?:" + "|".join(re.escape(label) for label in FIELD_LABELS) + r")\s*(?::|$)",
     re.IGNORECASE,
@@ -295,11 +371,14 @@ def _table_occurs_in_source(name: str, source: str) -> bool:
 def _validate_cards(text: str, source: str) -> list[str]:
     if text.strip() == OUT_OF_SCOPE:
         return []
-    cards = _split_cards(text)
-    errors = []
+    job_map, card_text = _split_answer(text)
+    cards = _split_cards(card_text)
     ids = []
+    risks = set()
     temporary_objects = _temporary_objects(source)
     required = (
+        "Test type",
+        "Step",
         "Source table",
         "Target table",
         "Key columns",
@@ -309,6 +388,9 @@ def _validate_cards(text: str, source: str) -> list[str]:
     )
     if not cards:
         return ["No test cards were found."]
+    steps = _parse_map(job_map)
+    errors = _validate_map(steps, source)
+    kinds = {step["step"]: step["kind"] for step in steps}
     if len(cards) > MAX_CARDS:
         errors.append(f"The answer contains {len(cards)} cards; maximum is {MAX_CARDS}.")
     for card in cards:
@@ -325,13 +407,43 @@ def _validate_cards(text: str, source: str) -> list[str]:
         for heading in required:
             if not _section_value(card, heading):
                 errors.append(f"TC-{card_id:03d} is missing '{heading}'.")
+        # The downstream SQL generator filters on this value, so it must be exact.
+        # Functional cards run after the job; Technical cards say where in it.
+        test_type = _section_value(card, "Test type").rstrip(" .").lower()
+        has_run_point = bool(_section_value(card, "Run point"))
+        if test_type and test_type not in TEST_TYPES:
+            errors.append(f"TC-{card_id:03d} 'Test type' must be Functional or Technical.")
+        elif test_type == "technical" and not has_run_point:
+            errors.append(f"TC-{card_id:03d} is Technical and is missing 'Run point'.")
+        elif test_type == "functional" and has_run_point:
+            errors.append(f"TC-{card_id:03d} is Functional and must not have a 'Run point'.")
+        step_value = _section_value(card, "Step")
+        cited = frozenset(f"S{int(n)}" for n in STEP_ID_PATTERN.findall(step_value))
+        if step_value and not cited:
+            errors.append(f"TC-{card_id:03d} 'Step' must name a job map step such as S1.")
+        for step_id in sorted(cited):
+            if step_id not in kinds:
+                errors.append(f"TC-{card_id:03d} cites {step_id}, which is not in the job map.")
+            elif test_type == "functional" and kinds[step_id] in UNQUERYABLE_KINDS:
+                errors.append(
+                    f"TC-{card_id:03d} is Functional but cites {step_id}, a "
+                    f"'{kinds[step_id]}' step no query can check."
+                )
+        # Two cards on the same steps and category are one risk written twice.
+        risk = (cited, _section_value(card, "Category").lower())
+        if cited and risk in risks:
+            errors.append(f"TC-{card_id:03d} repeats the step and category of another card.")
+        risks.add(risk)
         for heading in ("Source table", "Target table"):
             value = _section_value(card, heading)
             if value.rstrip(" .").lower() == "query output" and heading == "Target table":
                 continue
             for name in _table_names(value):
                 normalized = name.lower().lstrip("#")
-                if normalized in temporary_objects:
+                if test_type == "functional" and "://" in name:
+                    # A file cannot be queried, so a Functional card cannot use it.
+                    errors.append(f"TC-{card_id:03d} is Functional and names a file in '{heading}'.")
+                elif normalized in temporary_objects:
                     errors.append(f"TC-{card_id:03d} names a temporary object in '{heading}'.")
                 elif _is_source_input(source) and not _table_occurs_in_source(name, source):
                     errors.append(
@@ -460,13 +572,16 @@ def invoke(payload: dict) -> dict:
         return {"error": str(exc), **echo}
     logger.info("Generating test cases from %d characters of source", len(source))
     try:
-        cards = generate(source, context, session_id)
+        answer = generate(source, context, session_id)
     except Exception as exc:
         logger.exception("Request failed")
         return {"error": str(exc), **echo}
+    # The map is returned as data beside the cards, so the markdown stays cards only.
+    job_map, cards = _split_answer(answer)
     logger.info("Done: %d characters of test cases", len(cards))
     return {
         "test_cases_markdown": cards,
+        "job_map": _parse_map(job_map),
         "details": _response_details(cards, source, session_id),
         **echo,
     }
